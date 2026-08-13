@@ -1,0 +1,30 @@
+[package]
+name = "dedupe"
+version = "0.1.0"
+edition = "2024"
+description = "Find duplicate files (including images and videos) by content hash, with media metadata comparison"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+bincode = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+console = "0.15"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp", "tiff", "ico"] }
+indicatif = "0.17"
+md-5 = "0.10"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+walkdir = "2"
+
+[dev-dependencies]
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
