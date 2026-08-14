@@ -44,7 +44,7 @@ the binary with no path just prints the help.
 | Flag | What it does |
 | --- | --- |
 | `-t, --types EXTS` | Scan only these extensions, comma-separated and case-insensitive, e.g. `--types jpg,png,mp4,txt` |
-| `-k, --keep-smaller` | Mark the smallest file in each duplicate group as the keeper |
+| `-k, --keep-smaller` | Mark the smallest file in each duplicate group as the keeper; for similar media, keep the **highest-resolution** version instead |
 | `-D, --delete` | Delete the duplicate files. Prompts per group unless `-y` |
 | `-y, --yes` | Assume "yes" for all deletion prompts |
 | `--hash ALGO` | Hash algorithm: `blake3` (default), `sha256`, `md5` |

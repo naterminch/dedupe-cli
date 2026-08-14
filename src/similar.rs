@@ -49,10 +49,13 @@ pub struct SimilarConfig {
 }
 
 /// One file in a similar group, with its similarity (0..=1) against the
-/// group's keeper (1.0 for the keeper itself).
+/// group's keeper (1.0 for the keeper itself), and its resolution (0 when
+/// unknown, e.g. a video probed without ffprobe).
 pub struct SimilarMember {
     pub entry: FileEntry,
     pub similarity: f64,
+    pub w: u32,
+    pub h: u32,
 }
 
 /// A set of files judged to be the same content (keeper first).
@@ -194,6 +197,8 @@ fn make_image_group(fps: &[ImageFp], cluster: Vec<usize>) -> SimilarGroup {
         .map(|i| SimilarMember {
             entry: fps[i].entry.clone(),
             similarity: hash_similarity(fps[i].hash, keeper_hash),
+            w: fps[i].w,
+            h: fps[i].h,
         })
         .collect();
     SimilarGroup {
@@ -400,6 +405,8 @@ fn make_video_group(fps: &[VideoFp], cluster: Vec<usize>) -> SimilarGroup {
                 &fps[keeper].frames,
                 2,
             ),
+            w: fps[i].w,
+            h: fps[i].h,
         })
         .collect();
     SimilarGroup {
@@ -683,8 +690,13 @@ pub fn build_similar_groups(
                 m.content_hash = engine.full(&m.path).ok();
             }
 
+            // With `--keep-smaller`, prefer the highest-resolution version as
+            // the keeper — a smaller file is usually the re-encoded/lower-res
+            // copy, and the whole point is to keep the best original. Falls
+            // back to the smallest file when no resolution is known (or for
+            // non-media groups).
             let keep_idx = if keep_smaller {
-                choose_smallest(&members)
+                choose_keep_best_resolution(&sg.members)
             } else {
                 0
             };
@@ -713,10 +725,25 @@ pub fn build_similar_groups(
     Ok(built)
 }
 
-fn choose_smallest(members: &[GroupMember]) -> usize {
+/// Pick the member to keep when `--keep-smaller` is set: the highest
+/// resolution (width × height) wins, ties broken by smallest size then path.
+/// Members with unknown resolution (0×0, e.g. a video probed without ffprobe)
+/// rank below any member with known resolution; when nobody has a known
+/// resolution, fall back to the smallest file (previous behavior).
+fn choose_keep_best_resolution(members: &[SimilarMember]) -> usize {
+    let area = |m: &SimilarMember| -> Option<u64> {
+        (m.w > 0 && m.h > 0).then_some(m.w as u64 * m.h as u64)
+    };
     let mut best = 0usize;
     for (i, m) in members.iter().enumerate().skip(1) {
-        if (m.size, &m.path) < (members[best].size, &members[best].path) {
+        let b = &members[best];
+        let better = match (area(m), area(b)) {
+            (Some(a), Some(ba)) => a > ba || (a == ba && (m.entry.size, &m.entry.path) < (b.entry.size, &b.entry.path)),
+            (Some(_), None) => true,
+            (None, None) => (m.entry.size, &m.entry.path) < (b.entry.size, &b.entry.path),
+            (None, Some(_)) => false,
+        };
+        if better {
             best = i;
         }
     }
@@ -774,6 +801,58 @@ mod tests {
         // strictly worse.
         let sim0 = frame_seq_similarity(&a, &b, 0);
         assert!(sim0 < sim && sim0 < 1.0);
+    }
+
+    fn sim_member(path: &str, size: u64, w: u32, h: u32) -> SimilarMember {
+        SimilarMember {
+            entry: entry(Path::new(path), size),
+            similarity: 1.0,
+            w,
+            h,
+        }
+    }
+
+    #[test]
+    fn keep_smaller_prefers_higher_resolution() {
+        // A 4K PNG is bigger than a 720p JPG, but with --keep-smaller the
+        // higher-resolution version must be the keeper.
+        let members = vec![
+            sim_member("/media/low.jpg", 200_000, 1280, 720),
+            sim_member("/media/high.png", 8_000_000, 3840, 2160),
+        ];
+        assert_eq!(choose_keep_best_resolution(&members), 1);
+    }
+
+    #[test]
+    fn keep_smaller_ties_break_by_smallest_size() {
+        // Same resolution: the smallest file wins (like before).
+        let members = vec![
+            sim_member("/media/c.png", 7_000_000, 1920, 1080),
+            sim_member("/media/a.png", 5_000_000, 1920, 1080),
+            sim_member("/media/b.png", 3_000_000, 1920, 1080),
+        ];
+        assert_eq!(choose_keep_best_resolution(&members), 2);
+    }
+
+    #[test]
+    fn keep_smaller_unknown_resolution_falls_back_to_smallest() {
+        // Videos probed without ffprobe have 0x0: fall back to smallest.
+        let members = vec![
+            sim_member("/media/a.mp4", 10_000_000, 0, 0),
+            sim_member("/media/b.mp4", 5_000_000, 0, 0),
+            sim_member("/media/c.mp4", 8_000_000, 0, 0),
+        ];
+        assert_eq!(choose_keep_best_resolution(&members), 1);
+    }
+
+    #[test]
+    fn keep_smaller_known_resolution_beats_unknown() {
+        // A tiny unknown-res file must lose to a bigger known-res one.
+        let members = vec![
+            sim_member("/media/tiny.jpg", 50_000, 0, 0),
+            sim_member("/media/known.png", 900_000, 1920, 1080),
+        ];
+        assert_eq!(choose_keep_best_resolution(&members), 1);
     }
 
     #[test]
